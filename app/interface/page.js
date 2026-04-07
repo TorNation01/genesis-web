@@ -61,6 +61,8 @@ function InterfacePageContent() {
   const [playMode, setPlayMode] = useState(null);
   const [campaign, setCampaign] = useState(null);
   const [user, setUser] = useState(null);
+  const [telegramUrl, setTelegramUrl] = useState(null);
+  const [linking, setLinking] = useState(false);
 
   const roomCode = searchParams.get("room") || "—";
 
@@ -84,6 +86,26 @@ function InterfacePageContent() {
     void navigator.clipboard.writeText(roomCode);
     setCopied(true);
     setTimeout(() => setCopied(false), 2000);
+  }
+
+  async function handleTelegramClick() {
+    if (!campaignId) {
+      window.open(`https://t.me/${telegramBot}`, "_blank");
+      return;
+    }
+    setLinking(true);
+    try {
+      await fetch("/api/link-campaign", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ campaignId }),
+      });
+    } catch (err) {
+      console.error("Link error:", err);
+    }
+    const url = `https://t.me/${telegramBot}?start=${campaignId}`;
+    window.open(url, "_blank");
+    setLinking(false);
   }
 
   return (
@@ -537,19 +559,30 @@ function InterfacePageContent() {
             </ul>
 
             {iface.available ? (
-              <a
-                href={
-                  iface.id === "telegram"
-                    ? `https://t.me/${telegramBot}${campaignId ? `?start=${campaignId}` : ""}`
-                    : `/play/${campaignId}`
-                }
-                className="btn-primary"
-                style={{ width: "100%", justifyContent: "center", display: "flex" }}
-                target={iface.id === "telegram" ? "_blank" : undefined}
-                rel={iface.id === "telegram" ? "noopener noreferrer" : undefined}
-              >
-                {iface.cta}
-              </a>
+              iface.id === "telegram" ? (
+                <button
+                  type="button"
+                  onClick={handleTelegramClick}
+                  disabled={linking}
+                  className="btn-primary"
+                  style={{
+                    width: "100%",
+                    justifyContent: "center",
+                    display: "flex",
+                    opacity: linking ? 0.6 : 1,
+                  }}
+                >
+                  {linking ? "Preparing..." : iface.cta}
+                </button>
+              ) : (
+                <a
+                  href={`/play/${campaignId}`}
+                  className="btn-primary"
+                  style={{ width: "100%", justifyContent: "center", display: "flex" }}
+                >
+                  {iface.cta}
+                </a>
+              )
             ) : (
               <div>
                 <div

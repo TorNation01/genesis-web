@@ -26,20 +26,44 @@ function speakText(text, muted) {
   window.speechSynthesis.speak(utterance);
 }
 
-const INCOMPETECH_BASE =
-  "https://incompetech.com/music/royalty-free/mp3-royaltyfree";
-
-/** Scene mood loops — Kevin MacLeod / incompetech.com (CC BY 4.0). */
-const MOOD_MUSIC = {
-  exploration: `${INCOMPETECH_BASE}/Light%20Awash.mp3`,
-  tense_combat: `${INCOMPETECH_BASE}/Volatile%20Reaction.mp3`,
-  investigation: `${INCOMPETECH_BASE}/Comfortable%20Mystery%203.mp3`,
-  triumph: `${INCOMPETECH_BASE}/Winner%20Winner.mp3`,
-  dread: `${INCOMPETECH_BASE}/Despair%20and%20Triumph.mp3`,
-  sanctuary: `${INCOMPETECH_BASE}/Angel%20Share.mp3`,
-  revelation: `${INCOMPETECH_BASE}/Temple%20of%20the%20Manes.mp3`,
-  nemesis: `${INCOMPETECH_BASE}/Heart%20of%20Nowhere.mp3`,
+// ── Mood music track mapping ──────────────────────────────
+// These are the same tracks generated for the bot
+// Served from /ambience/ in the public folder
+// Copy your generated MP3s to genesis-web/public/ambience/
+const MOOD_TRACKS_WEB = {
+  exploration: "/ambience/exploration.mp3",
+  tense_combat: "/ambience/tense_combat.mp3",
+  investigation: "/ambience/investigation.mp3",
+  triumph: "/ambience/triumph.mp3",
+  dread: "/ambience/dread.mp3",
+  sanctuary: "/ambience/sanctuary.mp3",
+  revelation: "/ambience/revelation.mp3",
+  nemesis: "/ambience/nemesis.mp3",
 };
+
+const GENRE_DEFAULT_TRACKS = {
+  Fantasy: "exploration",
+  "Science Fiction": "exploration",
+  Horror: "dread",
+  Lovecraftian: "dread",
+  "Cosmic Horror": "dread",
+  "Gothic Romance": "investigation",
+  "Noir / Detective": "investigation",
+  Western: "exploration",
+  "Weird West": "dread",
+  "Post-Apocalyptic": "tense_combat",
+  Cyberpunk: "investigation",
+  "Mythology & Legend": "revelation",
+  "Supernatural / Paranormal": "dread",
+  "Space Opera": "exploration",
+  default: "exploration",
+};
+
+function getMoodTrack(mood, primaryGenre) {
+  if (mood && MOOD_TRACKS_WEB[mood]) return MOOD_TRACKS_WEB[mood];
+  const genreKey = GENRE_DEFAULT_TRACKS[primaryGenre] || "exploration";
+  return MOOD_TRACKS_WEB[genreKey];
+}
 
 function D20({ rolling, result, onRoll }) {
   const canvasRef = useRef(null);
@@ -498,9 +522,75 @@ export default function PlayInterface({ campaignId, userId: _userId }) {
   }, [muted]);
 
   const messagesEndRef = useRef(null);
+  // ── Music player ──────────────────────────────────────────
   const audioRef = useRef(null);
-  const lastMoodUrlRef = useRef(null);
+  const fadeIntervalRef = useRef(null);
+  const currentTrackRef = useRef(null);
   const supabase = useMemo(() => createSupabaseBrowserClient(), []);
+
+  const fadeAudio = useCallback((audio, targetVol, duration = 2000, onComplete) => {
+    if (!audio) return;
+    if (fadeIntervalRef.current) clearInterval(fadeIntervalRef.current);
+
+    const startVol = audio.volume;
+    const steps = 40;
+    const stepTime = duration / steps;
+    const volStep = (targetVol - startVol) / steps;
+    let stepCount = 0;
+
+    fadeIntervalRef.current = setInterval(() => {
+      stepCount++;
+      audio.volume = Math.max(0, Math.min(1, startVol + volStep * stepCount));
+      if (stepCount >= steps) {
+        clearInterval(fadeIntervalRef.current);
+        audio.volume = targetVol;
+        if (onComplete) onComplete();
+      }
+    }, stepTime);
+  }, []);
+
+  const playTrack = useCallback(
+    (trackUrl) => {
+      if (!trackUrl || mutedRef.current) return;
+      if (currentTrackRef.current === trackUrl) return;
+
+      const oldAudio = audioRef.current;
+
+      const newAudio = new Audio(trackUrl);
+      newAudio.loop = true;
+      newAudio.volume = 0;
+      newAudio.preload = "auto";
+
+      newAudio
+        .play()
+        .then(() => {
+          audioRef.current = newAudio;
+          currentTrackRef.current = trackUrl;
+
+          fadeAudio(newAudio, 0.18, 3000);
+
+          if (oldAudio) {
+            fadeAudio(oldAudio, 0, 3000, () => {
+              oldAudio.pause();
+              oldAudio.src = "";
+            });
+          }
+        })
+        .catch(() => {
+          console.log("Autoplay blocked — music starts on first interaction");
+        });
+    },
+    [fadeAudio],
+  );
+
+  const stopMusic = useCallback(() => {
+    if (audioRef.current) {
+      fadeAudio(audioRef.current, 0, 1000, () => {
+        audioRef.current?.pause();
+        currentTrackRef.current = null;
+      });
+    }
+  }, [fadeAudio]);
 
   useEffect(() => {
     async function load() {
@@ -512,13 +602,17 @@ export default function PlayInterface({ campaignId, userId: _userId }) {
         setMessages(data.messages || []);
         setState(data.state);
         setLoaded(true);
+        if (data.state?.scene_mood || data.campaign?.primary_genre) {
+          const trackUrl = getMoodTrack(data.state?.scene_mood, data.campaign?.primary_genre);
+          setTimeout(() => playTrack(trackUrl), 1500);
+        }
       } catch {
         setError("Could not load your campaign. Please try again.");
         setLoaded(true);
       }
     }
     load();
-  }, [campaignId]);
+  }, [campaignId, playTrack]);
 
   useEffect(() => {
     window.speechSynthesis?.getVoices();
@@ -583,6 +677,13 @@ export default function PlayInterface({ campaignId, userId: _userId }) {
         },
         (payload) => {
           setState(payload.new);
+
+          if (!mutedRef.current) {
+            const newMood = payload.new?.scene_mood;
+            const genre = campaign?.primary_genre;
+            const trackUrl = getMoodTrack(newMood, genre);
+            playTrack(trackUrl);
+          }
         },
       )
       .subscribe();
@@ -590,43 +691,18 @@ export default function PlayInterface({ campaignId, userId: _userId }) {
     return () => {
       void supabase.removeChannel(channel);
     };
-  }, [campaignId, supabase]);
+  }, [campaignId, supabase, campaign?.primary_genre, playTrack]);
 
   const mood = state?.scene_mood || "exploration";
-  const moodUrl = MOOD_MUSIC[mood] ?? MOOD_MUSIC.exploration;
-
-  useEffect(() => {
-    let el = audioRef.current;
-    if (!el) {
-      el = new Audio();
-      audioRef.current = el;
-    }
-
-    if (muted) {
-      el.pause();
-      return;
-    }
-
-    if (lastMoodUrlRef.current === moodUrl && !el.paused) return;
-
-    lastMoodUrlRef.current = moodUrl;
-    el.loop = true;
-    el.volume = 0.28;
-    el.src = moodUrl;
-    void el.play().catch(() => {});
-
-    return () => {
-      el.pause();
-    };
-  }, [moodUrl, muted]);
 
   useEffect(() => {
     return () => {
-      const a = audioRef.current;
-      if (a) {
-        a.pause();
-        a.src = "";
-        a.load();
+      if (audioRef.current) {
+        audioRef.current.pause();
+        audioRef.current.src = "";
+      }
+      if (fadeIntervalRef.current) {
+        clearInterval(fadeIntervalRef.current);
       }
     };
   }, []);
@@ -871,7 +947,18 @@ export default function PlayInterface({ campaignId, userId: _userId }) {
           <SparkDisplay spark={state?.spark} />
           <button
             type="button"
-            onClick={() => setMuted((m) => !m)}
+            onClick={() => {
+              setMuted((m) => {
+                const newMuted = !m;
+                if (newMuted) {
+                  stopMusic();
+                } else {
+                  const trackUrl = getMoodTrack(mood, campaign?.primary_genre);
+                  setTimeout(() => playTrack(trackUrl), 100);
+                }
+                return newMuted;
+              });
+            }}
             style={{
               background: "none",
               border: "none",

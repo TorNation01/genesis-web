@@ -1,7 +1,8 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { createSupabaseBrowserClient } from "@/lib/supabase";
+import { buildStarterPack, getItemById, ITEMS } from "@/lib/items-data";
 import {
   CLASSES,
   BACKGROUNDS,
@@ -16,15 +17,31 @@ import {
   ROLL_SCORE_TABLE,
 } from "@/lib/character-data";
 
+function Emoji({ children, size = 32 }) {
+  return (
+    <span
+      style={{
+        fontFamily: '"Apple Color Emoji", "Segoe UI Emoji", "Noto Color Emoji", sans-serif',
+        fontSize: size,
+        lineHeight: 1,
+        display: "inline-block",
+      }}
+    >
+      {children}
+    </span>
+  );
+}
+
 const STEPS = [
   { id: "race", label: "Race", icon: "🧬" },
-  { id: "gender", label: "Gender", icon: "⚧" },
+  { id: "gender", label: "Gender", icon: "🧑" },
   { id: "class", label: "Class", icon: "⚔️" },
   { id: "scores", label: "Ability Scores", icon: "🎲" },
   { id: "background", label: "Background", icon: "📖" },
   { id: "skills", label: "Skills", icon: "🎯" },
   { id: "feats", label: "Feats", icon: "⭐" },
   { id: "name", label: "Name & Finish", icon: "✦" },
+  { id: "inventory", label: "Starting Pack", icon: "🎒" },
 ];
 
 function applyRacialBonuses(scores, race) {
@@ -60,6 +77,9 @@ export default function CharacterCreator({
   const [selectedLanguages] = useState(["Common"]);
   const [characterName, setCharacterName] = useState("");
   const [characterAge, setCharacterAge] = useState("");
+  const [customItem1, setCustomItem1] = useState("");
+  const [customItem2, setCustomItem2] = useState("");
+  const [starterPack, setStarterPack] = useState(null);
 
   const races = useMemo(
     () => getRacesForGenre(primaryGenre, secondaryGenre, timePeriod),
@@ -67,6 +87,23 @@ export default function CharacterCreator({
   );
   const startingFeats = useMemo(() => getFeatsForLevel(1), []);
   const currentStepId = STEPS[step]?.id;
+
+  /* eslint-disable react-hooks/set-state-in-effect -- starter pack derived from class, backgrounds, and genres */
+  useEffect(() => {
+    void ITEMS;
+    if (selectedClass) {
+      const pack = buildStarterPack(
+        selectedClass.id,
+        selectedBackgrounds.map((b) => b.id),
+        primaryGenre,
+        secondaryGenre,
+      );
+      setStarterPack(pack);
+    } else {
+      setStarterPack(null);
+    }
+  }, [selectedClass, selectedBackgrounds, primaryGenre, secondaryGenre]);
+  /* eslint-enable react-hooks/set-state-in-effect */
 
   const abilityScores = useMemo(() => {
     if (Object.keys(rolledScores).length !== 6) return {};
@@ -167,6 +204,12 @@ export default function CharacterCreator({
         hp,
         hit_die: selectedClass?.hitDie || "d8",
         usb: getUSB(1),
+        starter_pack: starterPack?.items || [],
+        pack_slots: starterPack?.packSlots || 12,
+        quick_slots: starterPack?.quickSlots || 4,
+        bulk_limit: starterPack?.bulkLimit || 12,
+        custom_item_1: customItem1.trim() || null,
+        custom_item_2: customItem2.trim() || null,
       },
       is_template: false,
       transferable: false,
@@ -184,6 +227,42 @@ export default function CharacterCreator({
       setError(saveError.message || "Could not save character. Please try again.");
       setSaving(false);
       return;
+    }
+
+    if (data?.id && starterPack?.items) {
+      const inventoryRows = starterPack.items
+        .filter((i) => !i.isCustom)
+        .map((i) => ({
+          character_id: data.id,
+          item_id: i.itemId,
+          item_name: getItemById(i.itemId)?.name || i.itemId,
+          quantity: i.quantity || 1,
+          slot_location: "pack",
+          is_equipped: false,
+          is_custom: false,
+          acquired_from: "starter_pack",
+        }));
+
+      if (inventoryRows.length > 0) {
+        const { error: invErr } = await supabase.from("character_inventory").insert(inventoryRows);
+        if (invErr) console.error("character_inventory insert:", invErr);
+      }
+
+      if (customItem1.trim() || customItem2.trim()) {
+        const customRequests = [customItem1, customItem2]
+          .filter((c) => c.trim().length > 0)
+          .map((desc) => ({
+            character_id: data.id,
+            user_id: userId,
+            item_name: desc.split(" ").slice(0, 4).join(" "),
+            item_description: desc.trim(),
+            approved: null,
+          }));
+        if (customRequests.length > 0) {
+          const { error: reqErr } = await supabase.from("custom_item_requests").insert(customRequests);
+          if (reqErr) console.error("custom_item_requests insert:", reqErr);
+        }
+      }
     }
 
     await supabase.from("campaigns").update({ play_mode: "character_create" }).eq("id", campaignId);
@@ -210,6 +289,8 @@ export default function CharacterCreator({
         return true;
       case "name":
         return characterName.trim().length >= 2;
+      case "inventory":
+        return true;
       default:
         return false;
     }
@@ -376,46 +457,95 @@ export default function CharacterCreator({
           >
             Choose Your Gender
           </h2>
-          <p style={{ color: "var(--silver)", marginBottom: 32, opacity: 0.7 }}>
-            This shapes how NPCs and the world address your character.
+          <p
+            style={{
+              color: "var(--silver)",
+              marginBottom: 32,
+              opacity: 0.7,
+              fontFamily: "var(--font-body)",
+              fontSize: 16,
+            }}
+          >
+            This shapes how NPCs and the world address your character. All choices are equal — the Chronicler adapts
+            accordingly.
           </p>
           <div
             style={{
               display: "grid",
-              gridTemplateColumns: "repeat(auto-fill, minmax(180px, 1fr))",
+              gridTemplateColumns: "repeat(auto-fill, minmax(200px, 1fr))",
               gap: 2,
             }}
           >
-            {GENDERS.map((g) => (
-              <button
-                key={g.id}
-                type="button"
-                onClick={() => setSelectedGender(g)}
-                style={{
-                  padding: "32px 20px",
-                  textAlign: "center",
-                  cursor: "pointer",
-                  background: selectedGender?.id === g.id ? "rgba(201,168,76,0.1)" : "rgba(13,27,53,0.4)",
-                  border:
-                    selectedGender?.id === g.id
-                      ? "1px solid rgba(201,168,76,0.4)"
-                      : "1px solid rgba(201,168,76,0.06)",
-                  outline: "none",
-                  transition: "all 0.2s",
-                }}
-              >
-                <div style={{ fontSize: 36, marginBottom: 12 }}>{g.icon}</div>
-                <div
+            {GENDERS.map((g) => {
+              const isSelected = selectedGender?.id === g.id;
+              return (
+                <button
+                  key={g.id}
+                  type="button"
+                  onClick={() => setSelectedGender(g)}
                   style={{
-                    fontFamily: "var(--font-display)",
-                    fontSize: 14,
-                    color: selectedGender?.id === g.id ? "var(--gold)" : "var(--mist)",
+                    padding: "24px 20px",
+                    background: isSelected ? "rgba(201,168,76,0.12)" : "rgba(13,27,53,0.4)",
+                    border: isSelected ? "1px solid rgba(201,168,76,0.45)" : "1px solid rgba(201,168,76,0.07)",
+                    borderLeft: isSelected ? "3px solid var(--gold)" : "3px solid transparent",
+                    cursor: "pointer",
+                    textAlign: "left",
+                    outline: "none",
+                    transition: "all 0.2s ease",
+                    display: "flex",
+                    alignItems: "center",
+                    gap: 16,
                   }}
                 >
-                  {g.label}
-                </div>
-              </button>
-            ))}
+                  <div
+                    style={{
+                      width: 44,
+                      height: 44,
+                      borderRadius: "50%",
+                      flexShrink: 0,
+                      background: isSelected ? "rgba(201,168,76,0.2)" : "rgba(201,168,76,0.06)",
+                      border: isSelected ? "1px solid rgba(201,168,76,0.5)" : "1px solid rgba(201,168,76,0.15)",
+                      display: "flex",
+                      alignItems: "center",
+                      justifyContent: "center",
+                      fontFamily: "var(--font-deco)",
+                      fontSize: 16,
+                      color: isSelected ? "var(--gold)" : "rgba(201,168,76,0.5)",
+                      transition: "all 0.2s",
+                      boxShadow: isSelected ? "0 0 12px rgba(201,168,76,0.2)" : "none",
+                    }}
+                  >
+                    {g.initial}
+                  </div>
+                  <div>
+                    <div
+                      style={{
+                        fontFamily: "var(--font-display)",
+                        fontSize: 13,
+                        fontWeight: 600,
+                        letterSpacing: "0.05em",
+                        color: isSelected ? "var(--mist)" : "var(--silver)",
+                        marginBottom: 4,
+                        transition: "color 0.2s",
+                      }}
+                    >
+                      {g.label}
+                    </div>
+                    <div
+                      style={{
+                        fontFamily: "var(--font-body)",
+                        fontSize: 12,
+                        color: "var(--silver)",
+                        opacity: 0.5,
+                        lineHeight: 1.3,
+                      }}
+                    >
+                      {g.desc}
+                    </div>
+                  </div>
+                </button>
+              );
+            })}
           </div>
         </div>
       )}
@@ -462,7 +592,7 @@ export default function CharacterCreator({
                 }}
               >
                 <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 8 }}>
-                  <span style={{ fontSize: 24 }}>{cls.icon}</span>
+                  <Emoji size={26}>{cls.icon}</Emoji>
                   <span
                     style={{
                       fontFamily: "var(--font-display)",
@@ -1104,6 +1234,487 @@ export default function CharacterCreator({
                   <div style={{ fontFamily: "var(--font-display)", fontSize: 13, color: "var(--gold)" }}>{val}</div>
                 </div>
               ))}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {currentStepId === "inventory" && (
+        <div>
+          <h2
+            style={{
+              fontFamily: "var(--font-display)",
+              fontSize: 22,
+              color: "var(--mist)",
+              marginBottom: 8,
+            }}
+          >
+            Your Starting Pack
+          </h2>
+          <p
+            style={{
+              color: "var(--silver)",
+              marginBottom: 8,
+              fontFamily: "var(--font-body)",
+              fontSize: 16,
+              opacity: 0.7,
+            }}
+          >
+            Built from your class and background choices. Review what you carry into the Rift.
+          </p>
+
+          {starterPack && (
+            <div
+              style={{
+                display: "flex",
+                gap: 2,
+                marginBottom: 32,
+                flexWrap: "wrap",
+              }}
+            >
+              {[
+                { label: "Pack Slots", value: starterPack.packSlots, icon: "🎒" },
+                { label: "Quick Slots", value: starterPack.quickSlots, icon: "⚡" },
+                { label: "Bulk Limit", value: starterPack.bulkLimit, icon: "⚖️" },
+                {
+                  label: "Items",
+                  value: starterPack.items.filter((i) => !i.isCustom).length,
+                  icon: "📦",
+                },
+              ].map((stat) => (
+                <div
+                  key={stat.label}
+                  style={{
+                    flex: "1 1 120px",
+                    padding: "16px 20px",
+                    background: "rgba(13,27,53,0.5)",
+                    border: "1px solid rgba(201,168,76,0.12)",
+                    textAlign: "center",
+                  }}
+                >
+                  <div
+                    style={{
+                      fontFamily: '"Apple Color Emoji","Segoe UI Emoji",sans-serif',
+                      fontSize: 24,
+                      marginBottom: 8,
+                    }}
+                  >
+                    {stat.icon}
+                  </div>
+                  <div
+                    style={{
+                      fontFamily: "var(--font-deco)",
+                      fontSize: 24,
+                      color: "var(--gold)",
+                      lineHeight: 1,
+                      marginBottom: 4,
+                    }}
+                  >
+                    {stat.value}
+                  </div>
+                  <div
+                    style={{
+                      fontFamily: "var(--font-display)",
+                      fontSize: 9,
+                      letterSpacing: "0.15em",
+                      color: "var(--silver)",
+                      opacity: 0.5,
+                    }}
+                  >
+                    {stat.label.toUpperCase()}
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+
+          {starterPack &&
+            (() => {
+              const grouped = {};
+              for (const entry of starterPack.items) {
+                if (entry.isCustom) continue;
+                const item = getItemById(entry.itemId);
+                if (!item) continue;
+                const cat = item.category;
+                if (!grouped[cat]) grouped[cat] = [];
+                grouped[cat].push({ ...item, quantity: entry.quantity, note: entry.note });
+              }
+
+              const categoryOrder = [
+                "Weapon",
+                "Armor",
+                "Accessory",
+                "Ammo",
+                "Consumable",
+                "Tool",
+                "Utility",
+                "Material",
+                "Currency",
+                "Tech",
+                "Relic",
+              ];
+
+              const categoryColors = {
+                Weapon: "#8B2020",
+                Armor: "#1A4A8B",
+                Accessory: "#5B2D8E",
+                Ammo: "#6B4A0E",
+                Consumable: "#1A6B2A",
+                Tool: "#3A4A5A",
+                Utility: "#2A3A4A",
+                Material: "#4A3A1A",
+                Currency: "#6B5A0E",
+                Tech: "#0E4A6B",
+                Relic: "#6B0E6B",
+              };
+
+              return (
+                <div style={{ marginBottom: 40 }}>
+                  {categoryOrder
+                    .filter((cat) => grouped[cat])
+                    .map((cat) => (
+                      <div key={cat} style={{ marginBottom: 24 }}>
+                        <div
+                          style={{
+                            display: "flex",
+                            alignItems: "center",
+                            gap: 10,
+                            marginBottom: 10,
+                          }}
+                        >
+                          <div
+                            style={{
+                              width: 10,
+                              height: 10,
+                              borderRadius: "50%",
+                              background: categoryColors[cat] || "var(--gold)",
+                              flexShrink: 0,
+                            }}
+                          />
+                          <div
+                            style={{
+                              fontFamily: "var(--font-display)",
+                              fontSize: 11,
+                              letterSpacing: "0.2em",
+                              color: "var(--silver)",
+                              opacity: 0.6,
+                            }}
+                          >
+                            {cat.toUpperCase()}
+                          </div>
+                        </div>
+                        <div
+                          style={{
+                            display: "grid",
+                            gridTemplateColumns: "repeat(auto-fill, minmax(260px, 1fr))",
+                            gap: 2,
+                          }}
+                        >
+                          {grouped[cat].map((item) => (
+                            <div
+                              key={item.id}
+                              style={{
+                                padding: "14px 16px",
+                                background: "rgba(13,27,53,0.35)",
+                                border: "1px solid rgba(201,168,76,0.07)",
+                                borderLeft: `3px solid ${categoryColors[cat] || "rgba(201,168,76,0.3)"}`,
+                              }}
+                            >
+                              <div
+                                style={{
+                                  display: "flex",
+                                  justifyContent: "space-between",
+                                  alignItems: "flex-start",
+                                  marginBottom: 6,
+                                }}
+                              >
+                                <div
+                                  style={{
+                                    fontFamily: "var(--font-display)",
+                                    fontSize: 13,
+                                    fontWeight: 600,
+                                    color: "var(--mist)",
+                                  }}
+                                >
+                                  {item.name}
+                                </div>
+                                {item.quantity > 1 && (
+                                  <div
+                                    style={{
+                                      fontFamily: "var(--font-deco)",
+                                      fontSize: 16,
+                                      color: "var(--gold)",
+                                      flexShrink: 0,
+                                      marginLeft: 8,
+                                    }}
+                                  >
+                                    ×{item.quantity}
+                                  </div>
+                                )}
+                              </div>
+                              <div
+                                style={{
+                                  fontFamily: "var(--font-body)",
+                                  fontSize: 12,
+                                  color: "var(--silver)",
+                                  opacity: 0.55,
+                                  lineHeight: 1.4,
+                                  marginBottom:
+                                    item.effects && Object.keys(item.effects).length > 0 ? 8 : 0,
+                                }}
+                              >
+                                {item.desc}
+                              </div>
+                              {item.effects &&
+                                Object.keys(item.effects).filter((k) => item.effects[k]).length > 0 && (
+                                  <div
+                                    style={{
+                                      display: "flex",
+                                      flexWrap: "wrap",
+                                      gap: 4,
+                                    }}
+                                  >
+                                    {Object.entries(item.effects)
+                                      .filter(([, v]) => v)
+                                      .map(([k, v]) => (
+                                        <span
+                                          key={k}
+                                          style={{
+                                            padding: "2px 8px",
+                                            background: `${categoryColors[cat] || "rgba(201,168,76,0.1)"}20`,
+                                            border: `1px solid ${categoryColors[cat] || "rgba(201,168,76,0.2)"}40`,
+                                            fontFamily: "var(--font-display)",
+                                            fontSize: 9,
+                                            letterSpacing: "0.1em",
+                                            color: categoryColors[cat] || "var(--gold)",
+                                            opacity: 0.8,
+                                          }}
+                                        >
+                                          {k}: {String(v)}
+                                        </span>
+                                      ))}
+                                  </div>
+                                )}
+                              {item.tags && item.tags.length > 0 && (
+                                <div
+                                  style={{
+                                    marginTop: 6,
+                                    display: "flex",
+                                    flexWrap: "wrap",
+                                    gap: 3,
+                                  }}
+                                >
+                                  {item.tags.map((tag) => (
+                                    <span
+                                      key={tag}
+                                      style={{
+                                        padding: "1px 6px",
+                                        background: "rgba(201,168,76,0.04)",
+                                        border: "1px solid rgba(201,168,76,0.08)",
+                                        fontFamily: "var(--font-display)",
+                                        fontSize: 8,
+                                        letterSpacing: "0.1em",
+                                        color: "var(--silver)",
+                                        opacity: 0.4,
+                                      }}
+                                    >
+                                      {tag}
+                                    </span>
+                                  ))}
+                                </div>
+                              )}
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    ))}
+                </div>
+              );
+            })()}
+
+          <div
+            style={{
+              padding: "28px 28px",
+              background: "rgba(27,58,107,0.12)",
+              border: "1px solid rgba(201,168,76,0.15)",
+              marginBottom: 32,
+            }}
+          >
+            <div
+              style={{
+                fontFamily: "var(--font-display)",
+                fontSize: 13,
+                fontWeight: 600,
+                letterSpacing: "0.05em",
+                color: "var(--gold)",
+                marginBottom: 6,
+              }}
+            >
+              ✦ Custom Item Slots
+            </div>
+            <p
+              style={{
+                fontFamily: "var(--font-body)",
+                fontSize: 14,
+                color: "var(--silver)",
+                opacity: 0.7,
+                lineHeight: 1.6,
+                marginBottom: 24,
+              }}
+            >
+              You have 2 personal item slots. Describe something you want to carry — something that fits your
+              character and your world. The Chronicler will assess whether it&apos;s plausible before your adventure
+              begins.
+            </p>
+            <p
+              style={{
+                fontFamily: "var(--font-display)",
+                fontSize: 10,
+                letterSpacing: "0.15em",
+                color: "var(--silver)",
+                opacity: 0.4,
+                marginBottom: 20,
+              }}
+            >
+              NOTE — Items that grant unfair advantages or are impossible in your world will not be approved.
+            </p>
+
+            <div style={{ marginBottom: 16 }}>
+              <label
+                style={{
+                  display: "block",
+                  fontFamily: "var(--font-display)",
+                  fontSize: 11,
+                  letterSpacing: "0.15em",
+                  color: "var(--silver)",
+                  opacity: 0.5,
+                  marginBottom: 8,
+                }}
+              >
+                CUSTOM ITEM 1 (OPTIONAL)
+              </label>
+              <input
+                value={customItem1}
+                onChange={(e) => setCustomItem1(e.target.value)}
+                placeholder='Describe your item — e.g. "A worn pocket watch that belonged to my father"'
+                maxLength={200}
+                style={{
+                  width: "100%",
+                  padding: "12px 16px",
+                  background: "rgba(13,27,53,0.5)",
+                  border: "1px solid rgba(201,168,76,0.15)",
+                  color: "var(--mist)",
+                  fontFamily: "var(--font-body)",
+                  fontSize: 15,
+                  outline: "none",
+                  transition: "border-color 0.2s",
+                }}
+                onFocus={(e) => {
+                  e.target.style.borderColor = "rgba(201,168,76,0.4)";
+                }}
+                onBlur={(e) => {
+                  e.target.style.borderColor = "rgba(201,168,76,0.15)";
+                }}
+              />
+              <div
+                style={{
+                  textAlign: "right",
+                  marginTop: 4,
+                  fontFamily: "var(--font-display)",
+                  fontSize: 9,
+                  color: "var(--silver)",
+                  opacity: 0.3,
+                }}
+              >
+                {customItem1.length}/200
+              </div>
+            </div>
+
+            <div>
+              <label
+                style={{
+                  display: "block",
+                  fontFamily: "var(--font-display)",
+                  fontSize: 11,
+                  letterSpacing: "0.15em",
+                  color: "var(--silver)",
+                  opacity: 0.5,
+                  marginBottom: 8,
+                }}
+              >
+                CUSTOM ITEM 2 (OPTIONAL)
+              </label>
+              <input
+                value={customItem2}
+                onChange={(e) => setCustomItem2(e.target.value)}
+                placeholder='Describe your item — e.g. "A salvaged scanner that still works half the time"'
+                maxLength={200}
+                style={{
+                  width: "100%",
+                  padding: "12px 16px",
+                  background: "rgba(13,27,53,0.5)",
+                  border: "1px solid rgba(201,168,76,0.15)",
+                  color: "var(--mist)",
+                  fontFamily: "var(--font-body)",
+                  fontSize: 15,
+                  outline: "none",
+                  transition: "border-color 0.2s",
+                }}
+                onFocus={(e) => {
+                  e.target.style.borderColor = "rgba(201,168,76,0.4)";
+                }}
+                onBlur={(e) => {
+                  e.target.style.borderColor = "rgba(201,168,76,0.15)";
+                }}
+              />
+              <div
+                style={{
+                  textAlign: "right",
+                  marginTop: 4,
+                  fontFamily: "var(--font-display)",
+                  fontSize: 9,
+                  color: "var(--silver)",
+                  opacity: 0.3,
+                }}
+              >
+                {customItem2.length}/200
+              </div>
+            </div>
+          </div>
+
+          <div
+            style={{
+              padding: "20px 24px",
+              background: "rgba(13,27,53,0.3)",
+              border: "1px solid rgba(201,168,76,0.08)",
+              marginBottom: 8,
+            }}
+          >
+            <div
+              style={{
+                fontFamily: "var(--font-display)",
+                fontSize: 10,
+                letterSpacing: "0.2em",
+                color: "var(--silver)",
+                opacity: 0.4,
+                marginBottom: 12,
+              }}
+            >
+              PACK SUMMARY
+            </div>
+            <div
+              style={{
+                fontFamily: "var(--font-body)",
+                fontStyle: "italic",
+                fontSize: 15,
+                color: "var(--silver)",
+                opacity: 0.6,
+                lineHeight: 1.6,
+              }}
+            >
+              {starterPack
+                ? `${starterPack.items.filter((i) => !i.isCustom).length} items packed. ${starterPack.packSlots} pack slots available. ${customItem1.trim() || customItem2.trim() ? "Custom items pending Chronicler review." : "No custom items requested."}`
+                : "Calculating your pack..."}
             </div>
           </div>
         </div>
