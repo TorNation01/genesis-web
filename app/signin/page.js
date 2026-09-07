@@ -3,20 +3,36 @@
 import { useState } from "react";
 import Image from "next/image";
 import Link from "next/link";
-import { createSupabaseBrowserClient } from "@/lib/supabase";
+import { useRouter } from "next/navigation";
 
 export default function SignInPage() {
+  const router = useRouter();
+  const [displayName, setDisplayName] = useState("");
+  const [email, setEmail] = useState("");
   const [loading, setLoading] = useState(false);
+  const [error, setError] = useState(null);
 
-  async function handleGoogleSignIn() {
+  async function handleSignIn(e) {
+    e.preventDefault();
+    if (!displayName.trim()) {
+      setError("Enter a name to begin.");
+      return;
+    }
     setLoading(true);
+    setError(null);
     try {
-      const supabase = createSupabaseBrowserClient();
-      await supabase.auth.signInWithOAuth({
-        provider: "google",
-        options: { redirectTo: `${window.location.origin}/auth/callback` },
+      const res = await fetch("/api/auth/signin", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ displayName, email }),
       });
-    } catch {
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}));
+        throw new Error(body.error || "Could not sign in");
+      }
+      router.push("/world");
+    } catch (err) {
+      setError(err.message || "Could not sign in. Please try again.");
       setLoading(false);
     }
   }
@@ -73,12 +89,8 @@ export default function SignInPage() {
           opacity: 0.5,
           transition: "opacity 0.2s",
         }}
-        onMouseEnter={(e) => {
-          e.currentTarget.style.opacity = "1";
-        }}
-        onMouseLeave={(e) => {
-          e.currentTarget.style.opacity = "0.5";
-        }}
+        onMouseEnter={(e) => { e.currentTarget.style.opacity = "1"; }}
+        onMouseLeave={(e) => { e.currentTarget.style.opacity = "0.5"; }}
       >
         ← GENESIS
       </Link>
@@ -111,7 +123,7 @@ export default function SignInPage() {
           />
         ))}
 
-        <div style={{ textAlign: "center", marginBottom: 48 }}>
+        <div style={{ textAlign: "center", marginBottom: 40 }}>
           <div className="animate-float" style={{ marginBottom: 20 }}>
             <Image
               src="/genesis-logo.png"
@@ -145,7 +157,7 @@ export default function SignInPage() {
           </p>
         </div>
 
-        <div className="divider-gold" style={{ marginBottom: 40 }} />
+        <div className="divider-gold" style={{ marginBottom: 36 }} />
 
         <p
           style={{
@@ -154,7 +166,7 @@ export default function SignInPage() {
             fontSize: 17,
             fontStyle: "italic",
             color: "var(--silver)",
-            marginBottom: 36,
+            marginBottom: 28,
             lineHeight: 1.5,
           }}
         >
@@ -163,54 +175,88 @@ export default function SignInPage() {
           Step through to continue your story.
         </p>
 
-        <button
-          type="button"
-          onClick={handleGoogleSignIn}
-          disabled={loading}
-          style={{
-            width: "100%",
-            display: "flex",
-            alignItems: "center",
-            justifyContent: "center",
-            gap: 14,
-            padding: "16px 24px",
-            background: loading ? "rgba(201,168,76,0.05)" : "rgba(201,168,76,0.08)",
-            border: "1px solid rgba(201,168,76,0.25)",
-            color: "var(--mist)",
-            fontFamily: "var(--font-display)",
-            fontSize: 13,
-            letterSpacing: "0.12em",
-            cursor: loading ? "not-allowed" : "pointer",
-            transition: "all 0.3s ease",
-            opacity: loading ? 0.5 : 1,
-          }}
-          onMouseEnter={(e) => {
-            if (!loading) e.currentTarget.style.borderColor = "rgba(201,168,76,0.5)";
-          }}
-          onMouseLeave={(e) => {
-            e.currentTarget.style.borderColor = "rgba(201,168,76,0.25)";
-          }}
-        >
-          <svg width="18" height="18" viewBox="0 0 48 48" aria-hidden>
-            <path
-              fill="#FFC107"
-              d="M43.6 20H24v8h11.3C33.6 33.1 29.3 36 24 36c-6.6 0-12-5.4-12-12s5.4-12 12-12c3 0 5.7 1.1 7.8 2.9l5.7-5.7C34 6.5 29.3 4 24 4 12.9 4 4 12.9 4 24s8.9 20 20 20c11 0 19.7-8 19.7-20 0-1.3-.1-2.7-.1-4z"
-            />
-            <path
-              fill="#FF3D00"
-              d="M6.3 14.7l6.6 4.8C14.5 16 19 12 24 12c3 0 5.7 1.1 7.8 2.9l5.7-5.7C34 6.5 29.3 4 24 4c-7.7 0-14.3 4.3-17.7 10.7z"
-            />
-            <path
-              fill="#4CAF50"
-              d="M24 44c5.2 0 9.9-1.9 13.5-5.1l-6.2-5.2C29.4 35.5 26.8 36 24 36c-5.2 0-9.6-3.5-11.2-8.3l-6.5 5C9.6 39.5 16.3 44 24 44z"
-            />
-            <path
-              fill="#1976D2"
-              d="M43.6 20H24v8h11.3c-.8 2.3-2.3 4.3-4.3 5.7l6.2 5.2C40.7 35.6 44 30.2 44 24c0-1.3-.1-2.7-.4-4z"
-            />
-          </svg>
-          {loading ? "Opening the Rift..." : "Continue with Google"}
-        </button>
+        <form onSubmit={handleSignIn}>
+          <input
+            type="text"
+            value={displayName}
+            onChange={(e) => setDisplayName(e.target.value)}
+            placeholder="Your name"
+            autoComplete="name"
+            style={{
+              width: "100%",
+              padding: "14px 18px",
+              marginBottom: 12,
+              background: "rgba(7,8,15,0.6)",
+              border: "1px solid rgba(201,168,76,0.2)",
+              color: "var(--mist)",
+              fontFamily: "var(--font-body)",
+              fontSize: 15,
+              outline: "none",
+            }}
+          />
+          <input
+            type="email"
+            value={email}
+            onChange={(e) => setEmail(e.target.value)}
+            placeholder="Email (optional)"
+            autoComplete="email"
+            style={{
+              width: "100%",
+              padding: "14px 18px",
+              marginBottom: 20,
+              background: "rgba(7,8,15,0.6)",
+              border: "1px solid rgba(201,168,76,0.2)",
+              color: "var(--mist)",
+              fontFamily: "var(--font-body)",
+              fontSize: 15,
+              outline: "none",
+            }}
+          />
+
+          {error ? (
+            <p
+              style={{
+                textAlign: "center",
+                fontFamily: "var(--font-body)",
+                fontSize: 13,
+                color: "#e07a5f",
+                marginBottom: 16,
+              }}
+            >
+              {error}
+            </p>
+          ) : null}
+
+          <button
+            type="submit"
+            disabled={loading}
+            style={{
+              width: "100%",
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
+              gap: 14,
+              padding: "16px 24px",
+              background: loading ? "rgba(201,168,76,0.05)" : "rgba(201,168,76,0.08)",
+              border: "1px solid rgba(201,168,76,0.25)",
+              color: "var(--mist)",
+              fontFamily: "var(--font-display)",
+              fontSize: 13,
+              letterSpacing: "0.12em",
+              cursor: loading ? "not-allowed" : "pointer",
+              transition: "all 0.3s ease",
+              opacity: loading ? 0.5 : 1,
+            }}
+            onMouseEnter={(e) => {
+              if (!loading) e.currentTarget.style.borderColor = "rgba(201,168,76,0.5)";
+            }}
+            onMouseLeave={(e) => {
+              e.currentTarget.style.borderColor = "rgba(201,168,76,0.25)";
+            }}
+          >
+            {loading ? "Opening the Rift..." : "Enter the Rift"}
+          </button>
+        </form>
 
         <p
           style={{

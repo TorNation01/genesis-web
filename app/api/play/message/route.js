@@ -1,34 +1,10 @@
-import { createServerClient } from "@supabase/ssr";
-import { cookies } from "next/headers";
 import { NextResponse } from "next/server";
+import { createServerDb } from "@/lib/db";
+import { getSessionUser } from "@/lib/auth";
 
 export async function POST(request) {
   try {
-    const cookieStore = await cookies();
-    const supabase = createServerClient(
-      process.env.NEXT_PUBLIC_SUPABASE_URL,
-      process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY,
-      {
-        cookies: {
-          getAll() {
-            return cookieStore.getAll();
-          },
-          setAll(cookiesToSet) {
-            try {
-              cookiesToSet.forEach(({ name, value, options }) => {
-                cookieStore.set(name, value, options);
-              });
-            } catch {
-              /* Route handlers may not always be able to set cookies */
-            }
-          },
-        },
-      },
-    );
-
-    const {
-      data: { user },
-    } = await supabase.auth.getUser();
+    const user = await getSessionUser();
     if (!user) {
       return NextResponse.json({ error: "Unauthorised" }, { status: 401 });
     }
@@ -41,7 +17,8 @@ export async function POST(request) {
       );
     }
 
-    const { data: campaign, error: campError } = await supabase
+    const db = createServerDb();
+    const { data: campaign, error: campError } = await db
       .from("campaigns")
       .select("id, primary_genre, secondary_genre, time_period, status")
       .eq("id", campaignId)
@@ -52,7 +29,7 @@ export async function POST(request) {
       return NextResponse.json({ error: "Campaign not found" }, { status: 404 });
     }
 
-    const { error: insertError } = await supabase.from("messages").insert({
+    const { error: insertError } = await db.from("messages").insert({
       campaign_id: campaignId,
       role: "user",
       content: message,
@@ -63,7 +40,7 @@ export async function POST(request) {
       return NextResponse.json({ error: "Could not save message" }, { status: 500 });
     }
 
-    const { error: updateError } = await supabase
+    const { error: updateError } = await db
       .from("campaigns")
       .update({ last_played: new Date().toISOString() })
       .eq("id", campaignId);

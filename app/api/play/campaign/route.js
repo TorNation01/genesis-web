@@ -1,6 +1,6 @@
-import { createServerClient } from "@supabase/ssr";
-import { cookies } from "next/headers";
 import { NextResponse } from "next/server";
+import { createServerDb } from "@/lib/db";
+import { getSessionUser } from "@/lib/auth";
 
 export async function GET(request) {
   try {
@@ -10,36 +10,13 @@ export async function GET(request) {
       return NextResponse.json({ error: "Missing id" }, { status: 400 });
     }
 
-    const cookieStore = await cookies();
-    const supabase = createServerClient(
-      process.env.NEXT_PUBLIC_SUPABASE_URL,
-      process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY,
-      {
-        cookies: {
-          getAll() {
-            return cookieStore.getAll();
-          },
-          setAll(cookiesToSet) {
-            try {
-              cookiesToSet.forEach(({ name, value, options }) => {
-                cookieStore.set(name, value, options);
-              });
-            } catch {
-              /* Route handlers may not always be able to set cookies */
-            }
-          },
-        },
-      },
-    );
-
-    const {
-      data: { user },
-    } = await supabase.auth.getUser();
+    const user = await getSessionUser();
     if (!user) {
       return NextResponse.json({ error: "Unauthorised" }, { status: 401 });
     }
 
-    const { data: campaign } = await supabase
+    const db = createServerDb();
+    const { data: campaign } = await db
       .from("campaigns")
       .select("*")
       .eq("id", campaignId)
@@ -50,14 +27,14 @@ export async function GET(request) {
       return NextResponse.json({ error: "Not found" }, { status: 404 });
     }
 
-    const { data: messages } = await supabase
+    const { data: messages } = await db
       .from("messages")
       .select("id, role, content, created_at")
       .eq("campaign_id", campaignId)
       .order("created_at", { ascending: true })
       .limit(60);
 
-    const { data: state } = await supabase
+    const { data: state } = await db
       .from("campaign_state")
       .select("spark, scene_mood, tension_meter")
       .eq("campaign_id", campaignId)

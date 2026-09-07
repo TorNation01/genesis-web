@@ -3,7 +3,6 @@
 import { useState, useEffect, useRef, useCallback, useMemo } from "react";
 import Image from "next/image";
 import Link from "next/link";
-import { createSupabaseBrowserClient } from "@/lib/supabase";
 
 // Browser TTS for Chronicler responses
 function speakText(text, muted) {
@@ -526,7 +525,6 @@ export default function PlayInterface({ campaignId, userId: _userId }) {
   const audioRef = useRef(null);
   const fadeIntervalRef = useRef(null);
   const currentTrackRef = useRef(null);
-  const supabase = useMemo(() => createSupabaseBrowserClient(), []);
 
   const fadeAudio = useCallback((audio, targetVol, duration = 2000, onComplete) => {
     if (!audio) return;
@@ -628,36 +626,27 @@ export default function PlayInterface({ campaignId, userId: _userId }) {
   useEffect(() => {
     if (!campaignId) return;
 
-    const channel = supabase
-      .channel(`campaign:${campaignId}`)
-      .on(
-        "postgres_changes",
-        {
-          event: "INSERT",
-          schema: "public",
-          table: "messages",
-          filter: `campaign_id=eq.${campaignId}`,
-        },
-        (payload) => {
-          const newMsg = payload.new;
-          if (newMsg.role === "assistant") {
+    // Realtime replaced with polling against the local DB
+    let cancelled = false;
+    let lastMsgCount = -1;
+    let lastStateJson = "";
+
+    const poll = async () => {
+      try {
+        const res = await fetch(`/api/play/campaign?id=${campaignId}`);
+        if (!res.ok) return;
+        const data = await res.json();
+        if (cancelled) return;
+
+        const msgs = data.messages || [];
+        if (msgs.length !== lastMsgCount) {
+          lastMsgCount = msgs.length;
+          setMessages(msgs);
+          const last = msgs[msgs.length - 1];
+          if (last && last.role === "assistant") {
             setIsTyping(false);
-            let appended = false;
-            setMessages((prev) => {
-              if (newMsg.id && prev.some((m) => m.id === newMsg.id)) return prev;
-              if (
-                prev.some(
-                  (m) =>
-                    m.created_at === newMsg.created_at && m.content === newMsg.content,
-                )
-              ) {
-                return prev;
-              }
-              appended = true;
-              return [...prev, newMsg];
-            });
-            if (appended && !mutedRef.current) {
-              const cleanText = newMsg.content
+            if (!mutedRef.current) {
+              const cleanText = last.content
                 .replace(/\[NPC:[^\]]+\]/g, "")
                 .replace(/\[CHRONICLER\]/g, "")
                 .replace(/\[WITNESS\]/g, "")
@@ -665,33 +654,34 @@ export default function PlayInterface({ campaignId, userId: _userId }) {
               setTimeout(() => speakText(cleanText, mutedRef.current), 300);
             }
           }
-        },
-      )
-      .on(
-        "postgres_changes",
-        {
-          event: "UPDATE",
-          schema: "public",
-          table: "campaign_state",
-          filter: `campaign_id=eq.${campaignId}`,
-        },
-        (payload) => {
-          setState(payload.new);
+        }
 
-          if (!mutedRef.current) {
-            const newMood = payload.new?.scene_mood;
-            const genre = campaign?.primary_genre;
-            const trackUrl = getMoodTrack(newMood, genre);
-            playTrack(trackUrl);
+        if (data.state) {
+          const sj = JSON.stringify(data.state);
+          if (sj !== lastStateJson) {
+            lastStateJson = sj;
+            setState(data.state);
+            if (!mutedRef.current) {
+              const newMood = data.state?.scene_mood;
+              const genre = campaign?.primary_genre;
+              const trackUrl = getMoodTrack(newMood, genre);
+              playTrack(trackUrl);
+            }
           }
-        },
-      )
-      .subscribe();
+        }
+      } catch {
+        /* transient — retry next tick */
+      }
+    };
+
+    poll();
+    const interval = setInterval(poll, 1500);
 
     return () => {
-      void supabase.removeChannel(channel);
+      cancelled = true;
+      clearInterval(interval);
     };
-  }, [campaignId, supabase, campaign?.primary_genre, playTrack]);
+  }, [campaignId, campaign?.primary_genre, playTrack]);
 
   const mood = state?.scene_mood || "exploration";
 

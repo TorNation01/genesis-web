@@ -1,49 +1,35 @@
-import { createServerClient } from "@supabase/ssr";
 import { NextResponse } from "next/server";
+import crypto from "crypto";
+
+const SECRET = process.env.AUTH_SECRET || "genesis-local-dev-secret-change-me";
+const COOKIE = "genesis_session";
+
+function sign(value) {
+  return crypto.createHmac("sha256", SECRET).update(value).digest("hex");
+}
+
+function validSession(request) {
+  const token = request.cookies.get(COOKIE)?.value;
+  if (!token) return false;
+  const [userId, sig] = token.split(".");
+  if (!userId || !sig) return false;
+  return sig === sign(userId);
+}
 
 export async function middleware(request) {
-  let supabaseResponse = NextResponse.next({ request });
-
-  const supabase = createServerClient(
-    process.env.NEXT_PUBLIC_SUPABASE_URL,
-    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY,
-    {
-      cookies: {
-        getAll() {
-          return request.cookies.getAll();
-        },
-        setAll(cookiesToSet) {
-          cookiesToSet.forEach(({ name, value }) =>
-            request.cookies.set(name, value),
-          );
-          supabaseResponse = NextResponse.next({ request });
-          cookiesToSet.forEach(({ name, value, options }) =>
-            supabaseResponse.cookies.set(name, value, options),
-          );
-        },
-      },
-    },
-  );
-
-  // Refresh session — do not use getUser() as it can fail in Edge
-  await supabase.auth.getSession();
-
-  // Protect routes
-  const {
-    data: { session },
-  } = await supabase.auth.getSession();
   const isProtected =
     request.nextUrl.pathname.startsWith("/world") ||
     request.nextUrl.pathname.startsWith("/interface") ||
-    request.nextUrl.pathname.startsWith("/play");
+    request.nextUrl.pathname.startsWith("/play") ||
+    request.nextUrl.pathname.startsWith("/character");
 
-  if (!session && isProtected) {
+  if (isProtected && !validSession(request)) {
     const url = request.nextUrl.clone();
     url.pathname = "/signin";
     return NextResponse.redirect(url);
   }
 
-  return supabaseResponse;
+  return NextResponse.next({ request });
 }
 
 export const config = {

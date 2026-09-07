@@ -1,36 +1,17 @@
-import { createServerClient } from "@supabase/ssr";
-import { cookies } from "next/headers";
 import { NextResponse } from "next/server";
+import { createServerDb } from "@/lib/db";
+import { getSessionUser } from "@/lib/auth";
 
 export async function POST(request) {
   try {
-    const cookieStore = await cookies();
-    const supabase = createServerClient(
-      process.env.NEXT_PUBLIC_SUPABASE_URL,
-      process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY,
-      {
-        cookies: {
-          getAll() {
-            return cookieStore.getAll();
-          },
-          setAll(cookiesToSet) {
-            cookiesToSet.forEach(({ name, value, options }) => cookieStore.set(name, value, options));
-          },
-        },
-      },
-    );
-
-    const {
-      data: { user },
-    } = await supabase.auth.getUser();
+    const user = await getSessionUser();
     if (!user) return NextResponse.json({ error: "Unauthorised" }, { status: 401 });
 
     const { campaignId } = await request.json();
     if (!campaignId) return NextResponse.json({ error: "Missing campaignId" }, { status: 400 });
 
-    // Mark this campaign as pending telegram link
-    // Store the web user_id so the bot can match it
-    await supabase
+    const db = createServerDb();
+    await db
       .from("campaigns")
       .update({
         web_user_id: user.id,
